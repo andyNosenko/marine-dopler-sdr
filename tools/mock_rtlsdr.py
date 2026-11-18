@@ -1,38 +1,48 @@
+"""Mock RtlSdr: синтетический IQ с 250 Hz FM на ch16 и 250 Hz AM на пилоте."""
 import numpy as np
 
-SAMPLE_RATE  = 1024000
-ROTATION_HZ  = 250.0
-OFFSET_CH16  = +400_000
+SAMPLE_RATE = 1024000
+ROTATION_HZ = 250.0
+OFFSET_CH16 = +400_000
 OFFSET_PILOT = -400_000
 
+
 class MockRtlSdr:
-    def __init__(self, *args, azimuth_deg: float = 0.0, **kwargs):
+    def __init__(self, *a, **kw):
         self.sample_rate = SAMPLE_RATE
         self.gain = 28.0
         self.center_freq = 162_000_000
-        self.azimuth_deg = azimuth_deg
-        self._idx = 0
+        self._t = 0.0
 
-    def read_bytes(self, nbytes: int) -> bytes:
+    def read_bytes(self, nbytes):
         n = nbytes // 2
-        idx = self._idx + np.arange(n, dtype=np.float64)
-        self._idx += n
-        t = idx / self.sample_rate
+        t = (self._t + np.arange(n)) / SAMPLE_RATE
+        self._t += n / SAMPLE_RATE
 
-        slot = self.sample_rate / (4.0 * ROTATION_HZ)
-        ant = ((idx // slot) % 4).astype(np.int32)
-        angles = np.radians([0.0, 90.0, 180.0, 270.0])
-        phases = 0.8 * np.cos(np.radians(self.azimuth_deg) - angles)
+        rot = 2 * np.pi * ROTATION_HZ * t.copy()
 
-        ch16 = 0.20 * np.exp(1j * phases[ant]) * np.exp(1j * 2.0 * np.pi * OFFSET_CH16 * t)
-        gate = ((idx % (self.sample_rate / ROTATION_HZ)) < slot).astype(np.float64)
-        pilot = 0.25 * gate * np.exp(1j * 2.0 * np.pi * OFFSET_PILOT * t)
+        # ch16: 250 Hz FM через фазовую коммутацию антенн
+        slot = 1.0 / (4 * ROTATION_HZ)
+        ant_idx = ((t.copy() / slot) % 4).astype(np.int32)
+        ant_angles = np.radians([0.0, 90.0, 180.0, 270.0])
+        phases = (np.pi / 2) * np.cos(0 - ant_angles)
+        phase_t = phases[ant_idx]
+        ch16 = 0.5 * np.exp(1j * phase_t) * np.exp(
+            1j * 2 * np.pi * OFFSET_CH16 * t.copy()
+        )
+
+        # пилот: 250 Hz AM (амплитуда 0..0.3) — сглаженная версия реального строба
+        pilot_env = 0.15 * (1 + np.cos(rot))
+        pilot = pilot_env * np.exp(1j * 2 * np.pi * OFFSET_PILOT * t.copy())
+
         noise = 0.002 * (np.random.randn(n) + 1j * np.random.randn(n))
 
         iq = ch16 + pilot + noise
+        i = np.clip(iq.real * 127.5 + 127.5, 0, 255).astype(np.uint8)
+        q = np.clip(iq.imag * 127.5 + 127.5, 0, 255).astype(np.uint8)
         raw = np.empty(nbytes, dtype=np.uint8)
-        raw[0::2] = np.clip(iq.real * 127.5 + 127.5, 0, 255).astype(np.uint8)
-        raw[1::2] = np.clip(iq.imag * 127.5 + 127.5, 0, 255).astype(np.uint8)
+        raw[0::2] = i
+        raw[1::2] = q
         return raw.tobytes()
 
     def close(self):

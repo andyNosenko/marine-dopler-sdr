@@ -20,40 +20,34 @@ ZI_INIT = np.zeros(max(len(a_bpf), len(b_bpf)) - 1, dtype=float)
 
 udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-def rot(on: bool):
+
+def rot(on):
     udp.sendto(b'1' if on else b'0', ("127.0.0.1", SWITCH_PORT))
 
-def b2iq(raw: bytes) -> np.ndarray:
+
+def b2iq(raw):
     v = np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 127.5
     return (v[0::2] + 1j * v[1::2]) / 127.5
 
+
 def shift_dec(iq, off):
     t = np.arange(len(iq), dtype=np.float32) / SAMPLE_RATE
-    return resample_poly(
-        iq * np.exp(-1j * 2 * np.pi * off * t),
-        up=1, down=64, window=('kaiser', 8.0)
-    )
+    return resample_poly(iq * np.exp(-1j * 2 * np.pi * off * t), up=1, down=64)
+
 
 def tone_phase(x, hz, fs):
-    """Выделяет фазу на частоте hz и спектральный SNR относительно соседних частот."""
-    n = len(x)
-    xw = (x - x.mean()) * np.hanning(n)
-    t = np.arange(n, dtype=np.float32) / fs
-    v = np.sum(xw * np.exp(-1j * 2 * np.pi * hz * t))
-
-    spec = np.abs(np.fft.rfft(xw))
-    freqs = np.fft.rfftfreq(n, 1.0 / fs)
-    noise_mask = ((freqs >= hz - 80) & (freqs <= hz - 30)) | ((freqs >= hz + 30) & (freqs <= hz + 80))
-    noise_floor = np.mean(spec[noise_mask]) + 1e-9
-
-    snr = 20.0 * np.log10(np.abs(v) / noise_floor)
+    x = (x - x.mean()) * np.hanning(len(x))
+    t = np.arange(len(x), dtype=np.float32) / fs
+    v = np.sum(x * np.exp(-1j * 2 * np.pi * hz * t))
+    snr = 20 * np.log10(np.abs(v) / (np.std(x) * np.sqrt(len(x)) + 1e-9))
     return float(np.angle(v)), float(snr)
 
+
 def fm_discriminator(iq):
-    """Инстантанная частота: угол произведения соседних отсчётов."""
     return np.angle(iq[1:] * np.conj(iq[:-1]))
 
-def start_ais() -> subprocess.Popen:
+
+def start_ais():
     cmd = ["AIS-catcher", "-r", "cu8", "-", "-s", str(SAMPLE_RATE),
            "-u", "127.0.0.1", str(AIS_UDP_LOCAL)]
     p = os.getenv("AISHUB_PORT")
@@ -67,48 +61,48 @@ def start_ais() -> subprocess.Popen:
         pass
     return proc
 
-def open_sdr() -> RtlSdr:
+
+def open_sdr():
     sdr = RtlSdr()
     sdr.sample_rate = SAMPLE_RATE
     sdr.gain = 28.0
     sdr.center_freq = FREQ_AIS
     return sdr
 
-def safe_read(sdr: RtlSdr, nbytes: int, retries: int = 3):
+
+def safe_read(sdr, nbytes, retries=3):
     for attempt in range(retries):
         try:
             return sdr.read_bytes(nbytes)
         except Exception as e:
-            print(f"[USB] read error ({attempt+1}/{retries}): {e}", file=sys.stderr)
+            print("[USB] read error (%d/%d): %s" % (attempt+1, retries, e),
+                  file=sys.stderr)
             time.sleep(0.05)
     return None
 
+
 def measure(sdr, cal_off, invert):
-    """Возвращает (bearing, quality) или (None, 0.0) при USB-сбое."""
     rot(True)
     buf = []
     n = 204800
-    zi_s = ZI_INIT.copy()
-    zi_p = ZI_INIT.copy()
-
+    zi = ZI_INIT.copy()
     try:
         warm = safe_read(sdr, n)
         if warm is None:
             return None, 0.0
-        iq_w = b2iq(warm)
-        _, zi_s = lfilter(b_bpf, a_bpf, fm_discriminator(shift_dec(iq_w, OFFSET_CH16)), zi=zi_s)
-        _, zi_p = lfilter(b_bpf, a_bpf, np.abs(shift_dec(iq_w, OFFSET_PILOT)), zi=zi_p)
+        ch16_w = shift_dec(b2iq(warm), OFFSET_CH16)
+        _, zi = lfilter(b_bpf, a_bpf, fm_discriminator(ch16_w), zi=zi)
 
         for _ in range(11):
             raw = safe_read(sdr, n)
             if raw is None:
                 return None, 0.0
             iq = b2iq(raw)
-            ch16_f, zi_s = lfilter(b_bpf, a_bpf, fm_discriminator(shift_dec(iq, OFFSET_CH16)), zi=zi_s)
-            pilot_f, zi_p = lfilter(b_bpf, a_bpf, np.abs(shift_dec(iq, OFFSET_PILOT)), zi=zi_p)
-
+            ch16_fm = fm_discriminator(shift_dec(iq, OFFSET_CH16))
+            ch16_f, zi = lfilter(b_bpf, a_bpf, ch16_fm, zi=zi)
+            pilot_am = np.abs(shift_dec(iq, OFFSET_PILOT))
             ps, ss = tone_phase(ch16_f, ROTATION_HZ, FS_AUDIO)
-            pr, sr = tone_phase(pilot_f, ROTATION_HZ, FS_AUDIO)
+            pr, sr = tone_phase(pilot_am, ROTATION_HZ, FS_AUDIO)
             if ss < 10.0:
                 break
             if sr >= 14.0:
@@ -123,6 +117,7 @@ def measure(sdr, cal_off, invert):
     return (round((np.degrees(np.angle(mv)) + 360.0) % 360.0, 1),
             round(float(np.abs(mv)), 2))
 
+
 def run_multiplexer(cal_offset_deg=0.0, invert_sign=False, on_bearing_callback=None):
     ais = start_ais()
     sdr = open_sdr()
@@ -131,7 +126,6 @@ def run_multiplexer(cal_offset_deg=0.0, invert_sign=False, on_bearing_callback=N
     last = time.monotonic()
     last_alive = time.monotonic()
     print("[MUX] start", file=sys.stderr)
-
     try:
         while True:
             raw = safe_read(sdr, 131072)
@@ -143,27 +137,24 @@ def run_multiplexer(cal_offset_deg=0.0, invert_sign=False, on_bearing_callback=N
                 sdr = open_sdr()
                 last = time.monotonic()
                 continue
-
             if ais.stdin:
                 try:
                     ais.stdin.write(raw)
                 except BlockingIOError:
                     pass
                 except (BrokenPipeError, OSError) as e:
-                    print(f"[AIS] pipe broken: {e}", file=sys.stderr)
+                    print("[AIS] pipe broken: %s" % e, file=sys.stderr)
                     try: ais.kill(); ais.wait(timeout=2)
                     except Exception: pass
                     ais = start_ais()
-
             now = time.monotonic()
             if now - last_alive > 30.0:
                 if ais.poll() is not None:
-                    print("[AIS] died — restart", file=sys.stderr)
+                    print("[AIS] died - restart", file=sys.stderr)
                     try: ais.kill(); ais.wait(timeout=2)
                     except Exception: pass
                     ais = start_ais()
                 last_alive = now
-
             if (now - last) >= 0.6 and (ENABLE_CH16_SCAN or on_bearing_callback):
                 sdr.center_freq = FREQ_RDF
                 _ = safe_read(sdr, 65536)
@@ -179,7 +170,7 @@ def run_multiplexer(cal_offset_deg=0.0, invert_sign=False, on_bearing_callback=N
                         if b is not None and q >= 0.75:
                             try: on_bearing_callback(b, q)
                             except Exception as e:
-                                print(f"[CALLBACK] {e}", file=sys.stderr)
+                                print("[CALLBACK] %s" % e, file=sys.stderr)
                 sdr.center_freq = FREQ_AIS
                 _ = safe_read(sdr, 65536)
                 last = time.monotonic()
