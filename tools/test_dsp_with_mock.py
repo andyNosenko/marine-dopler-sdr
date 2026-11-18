@@ -8,6 +8,9 @@ ROTATION_HZ = 250.0
 OFFSET_CH16 = +400_000
 OFFSET_PILOT = -400_000
 FS_AUDIO = SAMPLE_RATE // 64
+# The mock's slot/tone reference has a 45° offset and reversed phase sign.
+MOCK_CAL_OFFSET_DEG = 45.0
+MOCK_INVERT_SIGN = True
 
 sys.path.insert(0, os.path.dirname(__file__))
 from mock_rtlsdr import MockRtlSdr
@@ -39,21 +42,26 @@ _, sr = mux.tone_phase(pilot_am, ROTATION_HZ, FS_AUDIO)
 print(f"ch16 SNR: {ss:.1f} dB (need >= 10)")
 print(f"pilot SNR: {sr:.1f} dB (need >= 14)")
 
-# 5) Полный measure()
+# 5) Проверка истинного пеленга на разных азимутах
 print("--- measure() ---")
-sdr = MockRtlSdr()
-np.random.seed(42)
-bearing, quality = mux.measure(sdr, cal_off=0.0, invert=False)
-print(f"Bearing: {bearing}  Quality: {quality}")
+for true_bearing in (0.0, 45.0, 90.0, 180.0, 270.0):
+    sdr = MockRtlSdr(source_bearing_deg=true_bearing)
+    np.random.seed(42)
+    bearing, quality = mux.measure(
+        sdr, cal_off=MOCK_CAL_OFFSET_DEG, invert=MOCK_INVERT_SIGN)
+    print(f"True: {true_bearing}  Bearing: {bearing}  Quality: {quality}")
 
-if bearing is None:
-    print("FAIL: measure() returned None")
-    sys.exit(1)
-if not (0 <= bearing < 360):
-    print(f"FAIL: bearing out of range: {bearing}")
-    sys.exit(1)
-if quality < 0.5:
-    print(f"FAIL: quality too low: {quality} (expected >= 0.5)")
-    sys.exit(1)
-print("OK: DSP chain (measure) works on synthetic IQ")
-sdr.close()
+    if bearing is None:
+        print(f"FAIL: measure() returned None for {true_bearing}°")
+        sys.exit(1)
+    error = abs(bearing - true_bearing)
+    error = min(error, 360.0 - error)
+    if error >= 15:
+        print(
+            f"FAIL: true={true_bearing} measured={bearing} err={error:.1f}°")
+        sys.exit(1)
+    if quality < 0.5:
+        print(f"FAIL: quality too low: {quality} (expected >= 0.5)")
+        sys.exit(1)
+    sdr.close()
+print("OK: DSP chain measures known synthetic bearings within 15°")

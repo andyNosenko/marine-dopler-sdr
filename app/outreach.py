@@ -1,5 +1,6 @@
-import os, sys, time, smtplib, requests
+import html, os, sys, time, smtplib, requests
 from email.message import EmailMessage
+from target_manager import MIN_AGE, vessel_age
 
 PROVIDER_API_KEY = os.getenv("PROVIDER_API_KEY", "")
 SMTP_HOST = os.getenv("SMTP_HOST", "")
@@ -67,21 +68,30 @@ def send_manual(conn, lock, mmsi, bearing, dist, note=""):
         tg("[!] MMSI %s not found" % mmsi); return False
     imo, name, length, already_sent = row
     if already_sent:
-        tg("[i] Proposal for M/V %s already sent" % name); return False
+        tg(html.escape("[i] Proposal for M/V %s already sent" % name))
+        return False
 
     info = enrich(imo or 0, mmsi)
+    year = info.get("year_built")
+    age = vessel_age(year)
+    if age < MIN_AGE:
+        tg(html.escape(
+            "[i] M/V %s (IMO %s) age=%s < MIN_AGE=%s, skip"
+            % (name or "?", imo, age, MIN_AGE)))
+        return False
+
     to = (info.get("manager_email") or info.get("owner_email") or "").strip()
     if not to:
         tg("[!] No email in API for MMSI %s" % mmsi); return False
-    year = info.get("year_built")
 
     with lock:
         cur = conn.execute(
-            "UPDATE vessels SET proposal_sent=1 "
-            "WHERE mmsi=? AND proposal_sent=0", (mmsi,))
+            "UPDATE vessels SET proposal_sent=1, proposal_pending_at=? "
+            "WHERE mmsi=? AND proposal_sent=0", (time.time(), mmsi))
         conn.commit()
         if cur.rowcount == 0:
-            tg("[i] Proposal for M/V %s claimed by another process" % name)
+            tg(html.escape(
+                "[i] Proposal for M/V %s claimed by another process" % name))
             return False
 
     msg = EmailMessage()
@@ -98,11 +108,18 @@ def send_manual(conn, lock, mmsi, bearing, dist, note=""):
     except Exception as e:
         with lock:
             conn.execute(
-                "UPDATE vessels SET proposal_sent=0 WHERE mmsi=?", (mmsi,))
+                "UPDATE vessels SET proposal_sent=0, proposal_pending_at=NULL "
+                "WHERE mmsi=?", (mmsi,))
             conn.commit()
-        tg("[X] SMTP error for MMSI %s: %s" % (mmsi, e)); return False
+        tg(html.escape("[X] SMTP error for MMSI %s: %s" % (mmsi, e)))
+        return False
 
-    tg("[OK] Proposal sent: M/V %s (MMSI %s) -> %s" % (name, mmsi, to))
+    with lock:
+        conn.execute(
+            "UPDATE vessels SET proposal_pending_at=NULL WHERE mmsi=?", (mmsi,))
+        conn.commit()
+    tg(html.escape(
+        "[OK] Proposal sent: M/V %s (MMSI %s) -> %s" % (name, mmsi, to)))
     return True
 
 def notify_candidates(bearing, quality, candidates):
@@ -116,15 +133,17 @@ def notify_candidates(bearing, quality, candidates):
     for c in candidates[:5]:
         tag = "[+]" if c["eligible"] else "[-]"
         sent_mark = " v" if c["proposal_sent"] else ""
+        safe_name = html.escape(str(c["name"] or "?"))
+        safe_reasons = html.escape(str(c["reasons"]))
         lines.append(
             "%s <b>%s</b>%s\n"
             "    MMSI <code>%s</code>, IMO %s, %s m\n"
             "    %s km, d=%s deg, conf=%s, age=%s s\n"
             "    <i>%s</i>"
-            % (tag, c["name"] or "?", sent_mark, c["mmsi"],
+            % (tag, safe_name, sent_mark, c["mmsi"],
                c["imo"] or "-", c["length"] or "?",
                c["dist_km"], c["delta_deg"], c["confidence"],
-               c["age_s"], c["reasons"]))
+               c["age_s"], safe_reasons))
         if c["eligible"] and not c["proposal_sent"]:
             kb.append([{
                 "text": "Send -> %s" % (c["name"] or c["mmsi"]),

@@ -3,3 +3,6 @@ requests==2.31.0
 scipy>=1.16.0
 numpy>=2.1.0
 pyyaml>=6.0
+# pyrtlsdr — только для реального RTL-SDR; для тестов используется mock_rtlsdr.py.
+# Для прода: раскомментировать зависимость и установить librtlsdr-dev.
+# pyrtlsdr==0.3.0

@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#include <stdlib.h>
 
 #define CHIP_NAME_ENV "GPIO_SIM_CHIP"   /* имя виртуального чипа */
 #define UDP_PORT      4210

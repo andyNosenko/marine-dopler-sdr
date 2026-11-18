@@ -46,4 +46,18 @@ tail -n 20 "$LOG" || true
 
 echo
 echo "=== DB result ==="
-sqlite3 "$DB" "SELECT mmsi, imo, shipname, length, lat, lon, last_seen FROM vessels;" || echo "(empty)"
+sqlite3 "$DB" "SELECT mmsi, imo, shipname, length, lat, lon, last_seen FROM vessels;"
+
+FOUND=$(sqlite3 "$DB" \
+  "SELECT COUNT(*) FROM vessels WHERE mmsi=273123456 AND imo=9123456 AND shipname='TEST VESSEL';")
+
+if [ "$FOUND" = "1" ]; then
+  echo "[E2E] PASS: TEST VESSEL found with correct static data"
+else
+  echo "[E2E] FAIL: expected mmsi=273123456 imo=9123456, got $FOUND match(es)"
+  echo "[E2E] Full DB dump:"
+  sqlite3 "$DB" ".dump vessels" || true
+  echo "[E2E] main.py log:"
+  cat "$LOG" || true
+  exit 1
+fi

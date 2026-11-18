@@ -14,7 +14,12 @@ CAL_OFF  = float(os.getenv("RDF_CAL_OFFSET", 0.0))
 INVERT   = os.getenv("RDF_INVERT_SIGN", "false").lower() == "true"
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")
+TG_OPERATOR_ID = os.getenv("TELEGRAM_OPERATOR_ID", "")
 DB_PATH  = os.getenv("DB_PATH", "/tmp/shipyard.db")
+
+if not TG_OPERATOR_ID:
+    print("[WARN] TELEGRAM_OPERATOR_ID is unset; callback user authorization is disabled",
+          file=sys.stderr)
 
 os.makedirs(os.path.dirname(DB_PATH) or "/tmp", exist_ok=True)
 conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
@@ -27,7 +32,16 @@ with conn:
         mmsi INTEGER PRIMARY KEY, imo INTEGER, shipname TEXT, length INTEGER,
         lat REAL, lon REAL, last_seen REAL,
         prev_lat REAL, prev_lon REAL, prev_seen REAL,
-        cog REAL, sog REAL, proposal_sent INTEGER DEFAULT 0)""")
+        cog REAL, sog REAL, proposal_sent INTEGER DEFAULT 0,
+        proposal_pending_at REAL DEFAULT NULL)""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(vessels)")}
+    if "proposal_pending_at" not in columns:
+        conn.execute(
+            "ALTER TABLE vessels ADD COLUMN proposal_pending_at REAL DEFAULT NULL")
+    conn.execute("""UPDATE vessels SET
+        proposal_sent=0, proposal_pending_at=NULL
+        WHERE proposal_sent=1 AND proposal_pending_at IS NOT NULL
+          AND (? - proposal_pending_at) > 600""", (time.time(),))
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vessels_last_seen "
                  "ON vessels(last_seen)")
 
@@ -168,7 +182,13 @@ def listen_ais():
 def _authorized_callback(cb):
     try:
         msg_chat = (cb.get("message") or {}).get("chat") or {}
-        return str(msg_chat.get("id", "")) == str(TG_CHAT)
+        if str(msg_chat.get("id", "")) != str(TG_CHAT):
+            return False
+        if TG_OPERATOR_ID:
+            from_user = cb.get("from") or {}
+            if str(from_user.get("id", "")) != str(TG_OPERATOR_ID):
+                return False
+        return True
     except Exception:
         return False
 

@@ -8,10 +8,11 @@ OFFSET_PILOT = -400_000
 
 
 class MockRtlSdr:
-    def __init__(self, *a, **kw):
+    def __init__(self, source_bearing_deg=0.0, *a, **kw):
         self.sample_rate = SAMPLE_RATE
         self.gain = 28.0
         self.center_freq = 162_000_000
+        self.source_bearing_deg = source_bearing_deg
         self._t = 0.0
 
     def read_bytes(self, nbytes):
@@ -25,7 +26,8 @@ class MockRtlSdr:
         slot = 1.0 / (4 * ROTATION_HZ)
         ant_idx = ((t.copy() / slot) % 4).astype(np.int32)
         ant_angles = np.radians([0.0, 90.0, 180.0, 270.0])
-        phases = (np.pi / 2) * np.cos(0 - ant_angles)
+        source_bearing = np.radians(self.source_bearing_deg)
+        phases = (np.pi / 2) * np.cos(source_bearing - ant_angles)
         phase_t = phases[ant_idx]
         ch16 = 0.5 * np.exp(1j * phase_t) * np.exp(
             1j * 2 * np.pi * OFFSET_CH16 * t.copy()

@@ -9,7 +9,6 @@ MIN_LEN         = int(os.getenv("MIN_VESSEL_LENGTH", 60))
 MAX_LEN         = int(os.getenv("MAX_VESSEL_LENGTH", 180))
 MIN_AGE         = int(os.getenv("MIN_VESSEL_AGE", 12))
 FUSION_WINDOW_S = float(os.getenv("FUSION_WINDOW_S", 30))
-MOTION_TOL_DEG  = float(os.getenv("MOTION_TOL_DEG", 8))
 
 def geo_bearing(lat1, lon1, lat2, lon2):
     p1, p2 = math.radians(lat1), math.radians(lat2)
