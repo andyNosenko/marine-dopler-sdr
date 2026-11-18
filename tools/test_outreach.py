@@ -87,6 +87,19 @@ class SendManualTests(unittest.TestCase):
 
 
 class TelegramFormattingTests(unittest.TestCase):
+    @patch.object(outreach.requests, "post")
+    def test_telegram_api_url_can_be_overridden(self, post):
+        post.return_value.status_code = 200
+        with patch.object(outreach, "TG_TOKEN", "test-token"):
+            with patch.object(outreach, "TG_CHAT", "test-chat"):
+                with patch.object(
+                        outreach, "TELEGRAM_API_URL", "http://localhost:8080"):
+                    outreach.tg("hello")
+
+        self.assertEqual(
+            post.call_args.args[0],
+            "http://localhost:8080/bottest-token/sendMessage")
+
     @patch.object(outreach, "tg")
     def test_candidate_name_and_reasons_are_html_escaped(self, tg):
         candidate = {

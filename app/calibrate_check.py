@@ -1,16 +1,28 @@
-import time, socket, sys
+import argparse, os, time, socket, sys
 import numpy as np
-from rtlsdr import RtlSdr
 from sdr_multiplexer import (
     SAMPLE_RATE, FREQ_RDF, OFFSET_PILOT, ROTATION_HZ,
     FS_AUDIO, shift_dec, tone_phase, measure
 )
 
-def check_pilot():
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+def _sdr_factory(mock=False, source_bearing_deg=0.0):
+    if mock:
+        if REPO_ROOT not in sys.path:
+            sys.path.insert(0, REPO_ROOT)
+        from tools.mock_rtlsdr import MockRtlSdr
+        return lambda: MockRtlSdr(source_bearing_deg=source_bearing_deg)
+
+    from rtlsdr import RtlSdr
+    return RtlSdr
+
+def check_pilot(sdr_factory=None):
     """Проверка SNR пилот-тона 156.000 МГц."""
+    sdr_factory = sdr_factory or _sdr_factory()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.sendto(b'1', ("127.0.0.1", 4210)); time.sleep(0.2)
-    sdr = RtlSdr()
+    sdr = sdr_factory()
     sdr.sample_rate = SAMPLE_RATE
     sdr.center_freq = FREQ_RDF
     sdr.gain = 28.0
@@ -25,11 +37,13 @@ def check_pilot():
     finally:
         s.sendto(b'0', ("127.0.0.1", 4210)); sdr.close()
 
-def calibrate_offset(known_azimuth_deg, num_measurements=20):
+def calibrate_offset(known_azimuth_deg, num_measurements=20,
+                     sdr_factory=None):
     """Калибровка RDF_CAL_OFFSET по известному источнику."""
+    sdr_factory = sdr_factory or _sdr_factory()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.sendto(b'1', ("127.0.0.1", 4210)); time.sleep(0.2)
-    sdr = RtlSdr()
+    sdr = sdr_factory()
     sdr.sample_rate = SAMPLE_RATE
     sdr.center_freq = FREQ_RDF
     sdr.gain = 28.0
@@ -56,8 +70,20 @@ def calibrate_offset(known_azimuth_deg, num_measurements=20):
     return mean_off
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "offset":
-        known = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
-        calibrate_offset(known)
+    parser = argparse.ArgumentParser(description="RTL-SDR pilot and RDF calibration")
+    parser.add_argument("mode", nargs="?", choices=("pilot", "offset"),
+                        default="pilot")
+    parser.add_argument("known_azimuth", nargs="?", type=float, default=0.0)
+    parser.add_argument("--mock", action="store_true",
+                        help="use synthetic IQ instead of an RTL-SDR")
+    parser.add_argument("--mock-bearing", type=float,
+                        help="source bearing for mock IQ (default: known azimuth)")
+    args = parser.parse_args()
+    mock_bearing = args.mock_bearing
+    if mock_bearing is None:
+        mock_bearing = args.known_azimuth if args.mode == "offset" else 0.0
+    sdr_factory = _sdr_factory(args.mock, mock_bearing)
+    if args.mode == "offset":
+        calibrate_offset(args.known_azimuth, sdr_factory=sdr_factory)
     else:
-        check_pilot()
+        check_pilot(sdr_factory=sdr_factory)

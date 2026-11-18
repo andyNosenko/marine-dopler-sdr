@@ -1,7 +1,6 @@
 import os, time, socket, subprocess, sys
 import numpy as np
 from scipy.signal import butter, lfilter, resample_poly
-from rtlsdr import RtlSdr
 
 SAMPLE_RATE  = 1024000
 FREQ_AIS     = 162_000_000
@@ -63,6 +62,8 @@ def start_ais():
 
 
 def open_sdr():
+    from rtlsdr import RtlSdr
+
     sdr = RtlSdr()
     sdr.sample_rate = SAMPLE_RATE
     sdr.gain = 28.0

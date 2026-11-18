@@ -1,0 +1,38 @@
+services:
+  yard-sdr-node:
+    build: .
+    image: yard-sdr-node:local
+    container_name: yard-sdr-node
+    env_file: .env
+    environment:
+      DB_PATH: /data/shipyard.db
+      PYTHONPATH: /opt/yard-sdr-node
+    volumes:
+      - ./data:/data
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    network_mode: host
+    depends_on:
+      - switch-daemon
+    restart: unless-stopped
+    init: true
+
+  switch-daemon:
+    image: yard-sdr-node:local
+    build: .
+    container_name: yard-sdr-switch
+    command: ["/usr/local/sbin/yard-sdr-switch-daemon"]
+    environment:
+      GPIO_CHIP: ${GPIO_CHIP:-/dev/gpiochip1}
+      GPIO_LINE_A: ${GPIO_LINE_A:-73}
+      GPIO_LINE_B: ${GPIO_LINE_B:-70}
+      GPIO_LINE_GATE: ${GPIO_LINE_GATE:-69}
+    devices:
+      - "${GPIO_CHIP:-/dev/gpiochip1}:${GPIO_CHIP:-/dev/gpiochip1}"
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+    network_mode: host
+    restart: unless-stopped
+    init: true

@@ -112,6 +112,70 @@ with patch.object(main.requests, "get",
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_wait_for_clock_until_ntp_is_synchronized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "clock.db")
+            code = """
+import main
+from types import SimpleNamespace
+from unittest.mock import patch
+
+responses = [SimpleNamespace(stdout="no\\n"), SimpleNamespace(stdout="yes\\n")]
+with patch.object(main.subprocess, "run", side_effect=responses) as check_ntp:
+    with patch.object(main.time, "sleep") as sleep:
+        main.wait_for_clock()
+        assert check_ntp.call_count == 2
+        sleep.assert_called_once_with(main.CLOCK_RETRY_SECONDS)
+"""
+            result = self._start_main(path, code)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_waits_for_valid_time_when_ntp_check_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "clock-fallback.db")
+            code = """
+import main
+from unittest.mock import patch
+
+with patch.object(main.subprocess, "run", side_effect=FileNotFoundError):
+    with patch.object(main.time, "time",
+                      side_effect=[main.CLOCK_MIN_TIMESTAMP - 1,
+                                   main.CLOCK_MIN_TIMESTAMP]):
+        with patch.object(main.time, "sleep") as sleep:
+            main.wait_for_clock()
+            sleep.assert_called_once_with(main.CLOCK_RETRY_SECONDS)
+"""
+            result = self._start_main(path, code)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_main_waits_for_clock_before_starting_threads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "startup.db")
+            code = """
+import main
+from unittest.mock import patch
+
+events = []
+class FakeThread:
+    def __init__(self, target, **kwargs):
+        events.append("thread:" + kwargs["name"])
+    def start(self):
+        pass
+
+with patch.object(main, "wait_for_clock",
+                  side_effect=lambda: events.append("clock")):
+    with patch.object(main, "_recover_stale_pending",
+                      side_effect=lambda: events.append("recovery")):
+        with patch.object(main.threading, "Thread", FakeThread):
+            with patch.object(main, "run_multiplexer",
+                              side_effect=lambda **kwargs: events.append("multiplexer")):
+                main.main()
+assert events == ["clock", "recovery", "thread:ais", "thread:tg",
+                  "multiplexer"], events
+"""
+            result = self._start_main(path, code)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

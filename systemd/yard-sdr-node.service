@@ -1,0 +1,28 @@
+[Unit]
+Description=Yard SDR AIS and RDF service
+Wants=network-online.target
+After=network-online.target chrony.service yard-sdr-switch.service
+Requires=yard-sdr-switch.service
+
+[Service]
+Type=simple
+User=yard-sdr
+Group=yard-sdr
+SupplementaryGroups=plugdev gpio
+WorkingDirectory=@APP_ROOT@/app
+EnvironmentFile=/etc/yard-sdr-node.env
+Environment=DB_PATH=/var/lib/yard-sdr/shipyard.db
+Environment=PYTHONPATH=@APP_ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@APP_ROOT@/.venv/bin/python -u main.py
+Restart=on-failure
+RestartSec=5
+StateDirectory=yard-sdr
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/yard-sdr
+
+[Install]
+WantedBy=multi-user.target

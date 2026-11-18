@@ -47,5 +47,10 @@ class MockRtlSdr:
         raw[1::2] = q
         return raw.tobytes()
 
+    def read_samples(self, num_samples):
+        raw = np.frombuffer(self.read_bytes(num_samples * 2), dtype=np.uint8)
+        iq = raw.astype(np.float32) - 127.5
+        return (iq[0::2] + 1j * iq[1::2]) / 127.5
+
     def close(self):
         pass

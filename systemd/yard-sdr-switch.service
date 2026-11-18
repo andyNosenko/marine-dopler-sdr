@@ -1,0 +1,25 @@
+[Unit]
+Description=Yard SDR antenna switch GPIO daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+User=yard-sdr
+Group=yard-sdr
+SupplementaryGroups=gpio
+Environment=GPIO_CHIP=/dev/gpiochip1
+Environment=GPIO_LINE_A=73
+Environment=GPIO_LINE_B=70
+Environment=GPIO_LINE_GATE=69
+ExecStart=/usr/local/sbin/yard-sdr-switch-daemon
+Restart=on-failure
+RestartSec=2
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=90
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

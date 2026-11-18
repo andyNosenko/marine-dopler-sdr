@@ -9,6 +9,8 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 TG_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT   = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_API_URL = os.getenv(
+    "TELEGRAM_API_URL", "https://api.telegram.org").rstrip("/")
 
 def _safe_tok(tok):
     return tok[:6] + "..." + tok[-4:] if tok and len(tok) > 12 else "<none>"
@@ -24,7 +26,7 @@ def tg(text, buttons=None, retries=3):
     for i in range(retries):
         try:
             r = requests.post(
-                "https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN,
+                "%s/bot%s/sendMessage" % (TELEGRAM_API_URL, TG_TOKEN),
                 json=payload, timeout=10)
             if r.status_code == 200:
                 return

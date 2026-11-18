@@ -1,8 +1,9 @@
 import os, sys, time, socket, sqlite3, threading, requests
-from datetime import datetime
+import subprocess
+from datetime import datetime, timezone
 from pyais import decode
 from target_manager import find_candidates
-from outreach import notify_candidates, send_manual, tg
+from outreach import (TELEGRAM_API_URL, notify_candidates, send_manual, tg)
 
 if os.getenv("MOCK_SDR", "false").lower() == "true":
     from tools.sdr_mock import run_multiplexer
@@ -16,6 +17,8 @@ TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")
 TG_OPERATOR_ID = os.getenv("TELEGRAM_OPERATOR_ID", "")
 DB_PATH  = os.getenv("DB_PATH", "/tmp/shipyard.db")
+CLOCK_MIN_TIMESTAMP = datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp()
+CLOCK_RETRY_SECONDS = 5
 
 if not TG_OPERATOR_ID:
     print("[WARN] TELEGRAM_OPERATOR_ID is unset; callback user authorization is disabled",
@@ -38,16 +41,22 @@ with conn:
     if "proposal_pending_at" not in columns:
         conn.execute(
             "ALTER TABLE vessels ADD COLUMN proposal_pending_at REAL DEFAULT NULL")
-    conn.execute("""UPDATE vessels SET
-        proposal_sent=0, proposal_pending_at=NULL
-        WHERE proposal_sent=1 AND proposal_pending_at IS NOT NULL
-          AND (? - proposal_pending_at) > 600""", (time.time(),))
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vessels_last_seen "
                  "ON vessels(last_seen)")
 
 lock = threading.Lock()
 POSITION_TYPES = {1, 2, 3, 18, 19}
 STATIC_TYPES   = {5, 24}
+
+def _recover_stale_pending():
+    with lock:
+        with conn:
+            conn.execute("""UPDATE vessels SET
+                proposal_sent=0, proposal_pending_at=NULL
+                WHERE proposal_sent=1 AND proposal_pending_at IS NOT NULL
+                  AND (? - proposal_pending_at) > 600""", (time.time(),))
+
+_recover_stale_pending()
 
 def on_bearing(bearing, quality):
     t = time.time()
@@ -178,6 +187,28 @@ def listen_ais():
         print("[AIS] stream error: %s" % e, file=sys.stderr)
 
 
+def wait_for_clock():
+    while True:
+        try:
+            result = subprocess.run(
+                ["timedatectl", "show", "--property=NTPSynchronized", "--value"],
+                check=True, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError) as e:
+            if time.time() >= CLOCK_MIN_TIMESTAMP:
+                print("[CLOCK] cannot verify NTP synchronization (%s); "
+                      "system time is plausible, continuing" % e,
+                      file=sys.stderr)
+                return
+            print("[CLOCK] waiting for a valid system time; NTP check failed: %s"
+                  % e, file=sys.stderr)
+        else:
+            if result.stdout.strip().lower() == "yes":
+                print("[CLOCK] NTP synchronized", file=sys.stderr)
+                return
+            print("[CLOCK] waiting for NTP synchronization", file=sys.stderr)
+        time.sleep(CLOCK_RETRY_SECONDS)
+
+
 
 def _authorized_callback(cb):
     try:
@@ -199,7 +230,7 @@ def tg_poll_loop():
     while True:
         try:
             r = requests.get(
-                "https://api.telegram.org/bot%s/getUpdates" % TG_TOKEN,
+                "%s/bot%s/getUpdates" % (TELEGRAM_API_URL, TG_TOKEN),
                 params={"offset": offset, "timeout": 30}, timeout=35).json()
             backoff = 1
             for u in r.get("result", []):
@@ -217,7 +248,8 @@ def tg_poll_loop():
                     continue
                 ok = send_manual(conn, lock, mmsi, bearing, dist)
                 requests.post(
-                    "https://api.telegram.org/bot%s/answerCallbackQuery" % TG_TOKEN,
+                    "%s/bot%s/answerCallbackQuery"
+                    % (TELEGRAM_API_URL, TG_TOKEN),
                     json={"callback_query_id": cb["id"],
                           "text": "Sent" if ok else "Error"},
                     timeout=10)
@@ -227,9 +259,14 @@ def tg_poll_loop():
         except Exception as e:
             print("[TGPOLL] unexpected: %s" % e, file=sys.stderr); time.sleep(5)
 
-if __name__ == "__main__":
+def main():
+    wait_for_clock()
+    _recover_stale_pending()
     threading.Thread(target=listen_ais,   daemon=True, name="ais").start()
     threading.Thread(target=tg_poll_loop, daemon=True, name="tg").start()
     print("[MAIN] run_multiplexer()...", file=sys.stderr)
     run_multiplexer(cal_offset_deg=CAL_OFF, invert_sign=INVERT,
                     on_bearing_callback=on_bearing)
+
+if __name__ == "__main__":
+    main()
