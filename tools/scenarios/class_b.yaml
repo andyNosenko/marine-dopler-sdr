@@ -1,0 +1,14 @@
+# Class B — буксир с малым IMO, не должен попасть в eligible
+step_s: 1.0
+duration_s: 30
+vessels:
+  - mmsi: 273999999
+    imo: 0
+    name: "TUG BOAT"
+    class: B
+    lat: 60.0050
+    lon: 30.3400
+    cog: 180.0
+    sog: 5.0
+    dlat_per_s: -0.000020
+    dlon_per_s: 0.0
